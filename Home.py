@@ -7,6 +7,10 @@ import streamlit as st
 import os
 import json
 from datetime import datetime
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Page config
 st.set_page_config(
