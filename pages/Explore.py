@@ -7,6 +7,7 @@ import streamlit as st
 import pandas as pd
 import json
 import io
+import os
 from datetime import datetime
 
 st.set_page_config(
@@ -14,6 +15,31 @@ st.set_page_config(
     page_icon="📊",
     layout="wide"
 )
+
+# Check environment variables first
+def check_env_vars():
+    """Check if required environment variables are set."""
+    required_vars = ["OPENAI_API_KEY", "SUPABASE_HOST", "SUPABASE_PASSWORD"]
+    missing = [var for var in required_vars if not os.getenv(var)]
+    return missing
+
+missing_vars = check_env_vars()
+if missing_vars:
+    st.title("📊 Explore Insights")
+    st.error(f"Missing required environment variables: {', '.join(missing_vars)}")
+    st.info("""
+    **Setup Required:**
+
+    Please configure the following environment variables:
+    - `OPENAI_API_KEY` - Your OpenAI API key
+    - `SUPABASE_HOST` - Your Supabase project host
+    - `SUPABASE_PASSWORD` - Your Supabase database password
+
+    For Streamlit Cloud, add these in **Settings > Secrets**.
+
+    [← Go to Home to see full setup instructions](/)
+    """)
+    st.stop()
 
 from utils.database import (
     init_database, get_all_sessions, get_session,
@@ -27,65 +53,130 @@ def init_page():
     """Initialize the page."""
     try:
         init_database()
-        return True
+        return True, None
     except Exception as e:
-        st.error(f"Database connection error: {str(e)}")
-        return False
+        return False, str(e)
 
 
 # Initialize
-if not init_page():
-    st.stop()
+db_ok, db_error = init_page()
 
 st.title("📊 Explore Insights")
+
+if not db_ok:
+    st.error(f"Database connection error: {db_error}")
+    st.info("Please check your Supabase credentials in the environment variables.")
+    st.stop()
 
 # Session selector
 sessions = get_all_sessions()
 
-if not sessions:
-    st.warning("No sessions found. Please create a session first.")
-    if st.button("← Go to Home"):
-        st.switch_page("Home.py")
-    st.stop()
-
-# Filter to completed sessions
-completed_sessions = [s for s in sessions if s['status'] == 'completed']
-
-if not completed_sessions:
-    st.warning("No completed sessions found. Please wait for processing to complete or create a new session.")
-    if st.button("← Go to Home"):
-        st.switch_page("Home.py")
-    st.stop()
-
-# Session selector in sidebar
+# Sidebar always visible
 with st.sidebar:
     st.header("🎯 Select Session")
 
-    session_options = {s['id']: f"{s['name']} ({s['created_at'].strftime('%Y-%m-%d') if isinstance(s['created_at'], datetime) else str(s['created_at'])[:10]})" for s in completed_sessions}
+    if not sessions:
+        st.warning("No sessions yet!")
+        st.info("Create a session on the Home page first.")
+        selected_session_id = None
+    else:
+        # Filter to completed sessions
+        completed_sessions = [s for s in sessions if s['status'] == 'completed']
 
-    selected_session_id = st.selectbox(
-        "Choose a session",
-        options=list(session_options.keys()),
-        format_func=lambda x: session_options[x]
-    )
+        if not completed_sessions:
+            st.warning("No completed sessions.")
+            st.info("Wait for processing to complete or create a new session.")
 
-    if selected_session_id:
-        session = get_session(selected_session_id)
-        if session:
-            st.divider()
-            st.subheader("📋 Session Info")
-            st.write(f"**Goal:** {session['research_goal'][:100]}...")
-            if session.get('competitors'):
-                st.write(f"**Competitors:** {', '.join(session['competitors'][:3])}...")
+            # Show all sessions with status
+            st.subheader("All Sessions:")
+            for s in sessions:
+                status_emoji = {'created': '🆕', 'processing': '⏳', 'completed': '✅', 'error': '❌'}.get(s['status'], '❓')
+                st.write(f"{status_emoji} {s['name']} - {s['status']}")
 
-            docs = get_documents(selected_session_id)
-            st.metric("Documents", len(docs))
+            selected_session_id = None
+        else:
+            session_options = {
+                s['id']: f"{s['name']} ({s['created_at'].strftime('%Y-%m-%d') if isinstance(s['created_at'], datetime) else str(s['created_at'])[:10]})"
+                for s in completed_sessions
+            }
+
+            selected_session_id = st.selectbox(
+                "Choose a session",
+                options=list(session_options.keys()),
+                format_func=lambda x: session_options[x]
+            )
+
+            if selected_session_id:
+                session = get_session(selected_session_id)
+                if session:
+                    st.divider()
+                    st.subheader("📋 Session Info")
+                    goal_text = session['research_goal']
+                    st.write(f"**Goal:** {goal_text[:100]}{'...' if len(goal_text) > 100 else ''}")
+                    if session.get('competitors'):
+                        comps = session['competitors'][:3]
+                        st.write(f"**Competitors:** {', '.join(comps)}{'...' if len(session['competitors']) > 3 else ''}")
+
+                    docs = get_documents(selected_session_id)
+                    st.metric("Documents", len(docs))
 
     st.divider()
-    st.markdown("[← Back to Home](./)")
+    if st.button("← Back to Home", use_container_width=True):
+        st.switch_page("Home.py")
 
 # Main content
-if selected_session_id:
+if not sessions:
+    # No sessions at all - show helpful message
+    st.info("👋 Welcome to the Explore page!")
+
+    st.markdown("""
+    ### Getting Started
+
+    To explore insights, you first need to create a research session:
+
+    1. **Go to the Home page** using the sidebar or button below
+    2. **Create a new session** with:
+       - A research goal (e.g., "Identify pain points in note-taking apps")
+       - Competitor names
+       - Optional: App Store IDs, changelog URLs
+    3. **Wait for processing** to complete
+    4. **Return here** to explore insights!
+
+    ### What you'll be able to do:
+
+    - 🎯 **View Pain Points** - Clustered issues with frequency and sentiment
+    - 💬 **Ask Questions** - Natural language Q&A over your research data
+    - 📈 **Get Summaries** - AI-generated executive summaries
+    - 📥 **Export Data** - Download insights as CSV or JSON
+    """)
+
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col2:
+        if st.button("🏠 Go to Home Page", use_container_width=True, type="primary"):
+            st.switch_page("Home.py")
+
+elif selected_session_id is None:
+    # Sessions exist but none completed
+    st.info("⏳ Waiting for a session to complete processing...")
+
+    st.markdown("""
+    ### Session Status
+
+    Your sessions are still being processed. This typically takes 1-2 minutes depending on the amount of data.
+
+    **What's happening:**
+    1. Fetching app reviews and changelog content
+    2. Chunking and embedding text
+    3. Analyzing pain point clusters
+
+    Once complete, you'll be able to explore insights here!
+    """)
+
+    if st.button("🔄 Refresh Page"):
+        st.rerun()
+
+else:
+    # We have a selected session - show full interface
     session = get_session(selected_session_id)
     insights = get_insights(selected_session_id)
     vectors = get_vectors(selected_session_id)
@@ -99,6 +190,14 @@ if selected_session_id:
 
         if not insights:
             st.info("No pain points found. The session may need more data or re-processing.")
+            st.markdown("""
+            **Possible reasons:**
+            - Not enough review data was fetched
+            - The time window may be too narrow
+            - App Store IDs may be incorrect
+
+            Try going back to Home and re-processing the session with different parameters.
+            """)
         else:
             # Sentiment filter
             col1, col2 = st.columns([2, 1])
@@ -181,7 +280,7 @@ if selected_session_id:
                             for url in insight['evidence_urls'][:5]:
                                 st.markdown(f"- [{url[:50]}...]({url})" if len(url) > 50 else f"- [{url}]({url})")
             else:
-                st.info("No pain points match the current filters.")
+                st.info("No pain points match the current filters. Try adjusting the filters above.")
 
     # Tab 2: Ask Questions (RAG)
     with tab2:
@@ -192,7 +291,7 @@ if selected_session_id:
         """)
 
         # Example questions
-        with st.expander("💡 Example Questions"):
+        with st.expander("💡 Example Questions", expanded=False):
             st.markdown("""
             - What are the most common complaints about the onboarding process?
             - What features do users most frequently request?
@@ -213,60 +312,64 @@ if selected_session_id:
         with col1:
             num_sources = st.number_input("Sources to use", min_value=3, max_value=10, value=5)
 
-        if st.button("🔍 Get Answer", use_container_width=True):
+        if st.button("🔍 Get Answer", use_container_width=True, type="primary"):
             if question:
-                with st.spinner("Searching and generating answer..."):
-                    result = answer_question(
-                        question=question,
-                        vectors=vectors,
-                        research_goal=session.get('research_goal', ''),
-                        top_k=num_sources
-                    )
+                if not vectors:
+                    st.warning("No embedded documents found. The session may need to be re-processed.")
+                else:
+                    with st.spinner("Searching and generating answer..."):
+                        result = answer_question(
+                            question=question,
+                            vectors=vectors,
+                            research_goal=session.get('research_goal', ''),
+                            top_k=num_sources
+                        )
 
-                    # Display answer
-                    st.subheader("Answer")
+                        # Display answer
+                        st.subheader("Answer")
 
-                    # Confidence indicator
-                    confidence_colors = {
-                        'high': '🟢',
-                        'medium': '🟡',
-                        'low': '🟠',
-                        'none': '🔴',
-                        'error': '❌'
-                    }
-                    confidence = result.get('confidence', 'unknown')
-                    st.write(f"{confidence_colors.get(confidence, '❓')} Confidence: {confidence.title()} | Sources used: {result.get('num_sources', 0)}")
+                        # Confidence indicator
+                        confidence_colors = {
+                            'high': '🟢',
+                            'medium': '🟡',
+                            'low': '🟠',
+                            'none': '🔴',
+                            'error': '❌'
+                        }
+                        confidence = result.get('confidence', 'unknown')
+                        st.write(f"{confidence_colors.get(confidence, '❓')} Confidence: {confidence.title()} | Sources used: {result.get('num_sources', 0)}")
 
-                    st.markdown(result['answer'])
+                        st.markdown(result['answer'])
 
-                    # Citations
-                    if result.get('citations'):
-                        st.subheader("📚 Sources")
-                        for citation in result['citations']:
-                            relevance_pct = citation.get('relevance', 0) * 100
-                            st.markdown(f"""
-                            **[Source {citation['index']}]** {citation.get('source_name', 'Unknown')} ({citation.get('source_type', 'document')})
-                            - URL: [{citation.get('url', 'N/A')[:60]}...]({citation.get('url', '#')})
-                            - Relevance: {relevance_pct:.0f}%
-                            """)
+                        # Citations
+                        if result.get('citations'):
+                            st.subheader("📚 Sources")
+                            for citation in result['citations']:
+                                relevance_pct = citation.get('relevance', 0) * 100
+                                url = citation.get('url', '#')
+                                url_display = url[:60] + '...' if len(url) > 60 else url
+                                st.markdown(f"""
+                                **[Source {citation['index']}]** {citation.get('source_name', 'Unknown')} ({citation.get('source_type', 'document')})
+                                - URL: [{url_display}]({url})
+                                - Relevance: {relevance_pct:.0f}%
+                                """)
             else:
                 st.warning("Please enter a question.")
-
-        # Recent questions (stored in session state)
-        if 'recent_questions' not in st.session_state:
-            st.session_state.recent_questions = []
 
     # Tab 3: Summary
     with tab3:
         st.header("Executive Summary")
 
-        if st.button("🔄 Generate Summary", use_container_width=True):
-            with st.spinner("Generating executive summary..."):
-                summary = summarize_insights(
-                    insights=insights,
-                    research_goal=session.get('research_goal', '')
-                )
-                st.session_state['summary'] = summary
+        if st.button("🔄 Generate Summary", use_container_width=True, type="primary"):
+            if not insights:
+                st.warning("No insights available to summarize. Process some data first.")
+            else:
+                with st.spinner("Generating executive summary..."):
+                    summary = summarize_insights(
+                        insights=insights,
+                        research_goal=session.get('research_goal', '')
+                    )
+                    st.session_state['summary'] = summary
 
         if 'summary' in st.session_state:
             st.markdown(st.session_state['summary'])
@@ -304,6 +407,8 @@ if selected_session_id:
                 'Frequency': [i['frequency'] for i in top_5]
             })
             st.bar_chart(chart_data.set_index('Pain Point'))
+        else:
+            st.info("No insights available yet. Process a session first.")
 
     # Tab 4: Export
     with tab4:
@@ -383,6 +488,8 @@ if selected_session_id:
         # Full export (JSON)
         st.subheader("📦 Full Session Export (JSON)")
 
+        docs = get_documents(selected_session_id) if selected_session_id else []
+
         export_data = {
             'session': {
                 'id': session['id'],
@@ -404,7 +511,7 @@ if selected_session_id:
                 }
                 for i in insights
             ],
-            'documents_count': len(docs) if docs else 0,
+            'documents_count': len(docs),
             'vectors_count': len(vectors) if vectors else 0,
             'exported_at': datetime.now().isoformat()
         }
@@ -418,9 +525,6 @@ if selected_session_id:
             mime="application/json",
             use_container_width=True
         )
-
-else:
-    st.warning("Please select a session from the sidebar.")
 
 # Footer
 st.divider()
